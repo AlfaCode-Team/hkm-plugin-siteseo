@@ -1,0 +1,15 @@
+{
+    "name": "alfacode-team/hkm-plugin-siteseo",
+    "description": "HKM Kernel plugin providing 'seo.management'.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["hkm-kernel", "plugin", "php", "seo.management"],
+    "require": {
+        "php": ">=8.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "Plugins\\SiteSEO\\": ""
+        }
+    }
+}
