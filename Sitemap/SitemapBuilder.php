@@ -162,7 +162,15 @@ class SitemapBuilder implements SitemapBuilderInterface
 
 						foreach ($options as $x => $o)
 						{
-							$child->addChild("{$n}:{$x}", $o);
+							// Allow-list the element name and escape the value.
+							// $x came straight from the caller and becomes an
+							// element NAME — an invalid one corrupts the whole
+							// document, not just this entry.
+							if (!static::isAllowedChild($n, (string) $x)) {
+								continue;
+							}
+
+							$child->addChild("{$n}:{$x}", static::xmlText($o));
 						}
 					}
 
@@ -173,13 +181,17 @@ class SitemapBuilder implements SitemapBuilderInterface
 					$child = $url->addChild('news:news', null, static::NEWS_NS);
 
 					$pub = $child->addChild('news:publication');
-					$pub->addChild('news:name', $v['name']);
-					$pub->addChild('news:language', $v['language']);
+					$pub->addChild('news:name', static::xmlText($v['name'] ?? ''));
+					$pub->addChild('news:language', static::xmlText($v['language'] ?? ''));
 					unset($v['name'], $v['language']);
 
 					foreach ($v as $k => $p)
 					{
-						$child->addChild("{$n}:{$k}", $p);
+						if (!static::isAllowedChild('news', (string) $k)) {
+							continue;
+						}
+
+						$child->addChild("{$n}:{$k}", static::xmlText($p));
 					}
 
 					continue;
@@ -191,14 +203,14 @@ class SitemapBuilder implements SitemapBuilderInterface
 					{
 						$child = $url->addChild('xhtml:link', null, static::XHTML_NS);
 						$child->addAttribute('rel', 'alternate');
-						$child->addAttribute('href', $alt[0]);
-						$child->addAttribute('hreflang', $alt[1]);
+						$child->addAttribute('href', static::xmlText($alt[0] ?? ''));
+						$child->addAttribute('hreflang', static::xmlText($alt[1] ?? ''));
 					}
 
 					continue;
 				}
 
-				$url->addChild($n, $v);
+				$url->addChild($n, static::xmlText($v));
 			}
 
 			$this->max--;
@@ -218,6 +230,44 @@ class SitemapBuilder implements SitemapBuilderInterface
 		$this->url['lastmod'] = $this->pasreDate($date);
 
 		return $this;
+	}
+
+	/**
+	 * Element names each extension schema permits, per Google's specs.
+	 *
+	 * Caller-supplied option keys were used directly as element names. An
+	 * unexpected key produced an element outside the schema (silently ignored by
+	 * crawlers, so the data never appeared), and a key that is not a valid XML
+	 * name — a space, a digit first, a colon — threw or corrupted the DOCUMENT,
+	 * taking every other URL in the sitemap with it.
+	 */
+	protected const ALLOWED_CHILDREN = [
+		'image' => ['loc', 'caption', 'geo_location', 'title', 'license'],
+		'video' => [
+			'thumbnail_loc', 'title', 'description', 'content_loc', 'player_loc',
+			'duration', 'expiration_date', 'rating', 'view_count', 'publication_date',
+			'family_friendly', 'restriction', 'platform', 'requires_subscription',
+			'uploader', 'live', 'tag', 'category',
+		],
+		'news'  => ['publication_date', 'title', 'keywords', 'stock_tickers', 'genres'],
+	];
+
+	protected static function isAllowedChild(string $schema, string $name): bool
+	{
+		return \in_array($name, static::ALLOWED_CHILDREN[$schema] ?? [], true);
+	}
+
+	/**
+	 * Escape a value for XML text or an attribute.
+	 *
+	 * SimpleXMLElement::addChild() and addAttribute() do NOT entity-encode
+	 * ampersands — a long-standing documented gotcha. Any URL with a query
+	 * string ("?a=1&b=2") therefore produced malformed XML that crawlers reject
+	 * outright, so ONE such URL silently invalidated the entire sitemap.
+	 */
+	protected static function xmlText(mixed $value): string
+	{
+		return htmlspecialchars((string) $value, ENT_QUOTES | ENT_XML1 | ENT_SUBSTITUTE, 'UTF-8');
 	}
 
 	/**
