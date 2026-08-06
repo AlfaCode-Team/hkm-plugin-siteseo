@@ -3,48 +3,117 @@
 namespace Plugins\SiteSEO;
 
 
+/**
+ * Per-request page state (shared props + meta tags) and one-shot flash values.
+ *
+ * COROUTINE SAFETY
+ * ----------------
+ * $shared and $meta used to be plain process-statics. Under OpenSwoole one
+ * worker interleaves many in-flight requests, so request B's shared props and
+ * meta overwrote request A's while A was suspended on I/O — and A then rendered
+ * B's data. Since these carry page content (titles, descriptions, arbitrary
+ * shared props), that is a cross-request and potentially cross-TENANT data leak.
+ *
+ * State now lives in the current coroutine's context when there is one, which is
+ * isolated per coroutine and destroyed when it ends. Outside a coroutine
+ * (PHP-FPM, CLI) it falls back to the statics, which is correct there because
+ * those SAPIs genuinely serve one request per process.
+ */
 class Channel
 {
+    /** Fallback state for non-coroutine SAPIs. */
     protected static array $shared = [];
     protected static array $meta = [];
+
+    /**
+     * The current coroutine's context, or null outside one. Mirrors the
+     * detection used by I18n\Support\Lang and the HttpClient backoff.
+     */
+    private static function context(): ?\ArrayObject
+    {
+        if (\class_exists('\\OpenSwoole\\Coroutine') && \OpenSwoole\Coroutine::getCid() > 0) {
+            return \OpenSwoole\Coroutine::getContext();
+        }
+        if (\class_exists('\\Swoole\\Coroutine') && \Swoole\Coroutine::getCid() > 0) {
+            return \Swoole\Coroutine::getContext();
+        }
+
+        return null;
+    }
+
+    /** Read a request-scoped bag ('shared' | 'meta' | 'flash'). */
+    private static function bag(string $name): array
+    {
+        $context = self::context();
+
+        if ($context !== null) {
+            return (array) ($context['hkm.seo.' . $name] ?? []);
+        }
+
+        return $name === 'meta' ? static::$meta : static::$shared;
+    }
+
+    /** Write a request-scoped bag back. */
+    private static function putBag(string $name, array $values): void
+    {
+        $context = self::context();
+
+        if ($context !== null) {
+            $context['hkm.seo.' . $name] = $values;
+
+            return;
+        }
+
+        if ($name === 'meta') {
+            static::$meta = $values;
+        } else {
+            static::$shared = $values;
+        }
+    }
 
     // === Shared data API ===
 
     public static function share(string $key, mixed $value): void
     {
-        static::$shared[$key] = $value;
+        $shared       = self::bag('shared');
+        $shared[$key] = $value;
+        self::putBag('shared', $shared);
     }
 
     public static function mergeShared(array $data): void
     {
-        static::$shared = array_merge(static::$shared, $data);
+        self::putBag('shared', array_merge(self::bag('shared'), $data));
     }
 
     public static function get(string $key, mixed $default = null): mixed
     {
-        return static::$shared[$key] ?? $default;
+        return self::bag('shared')[$key] ?? $default;
     }
 
     public static function all(): array
     {
-        return static::$shared;
+        return self::bag('shared');
     }
 
     public static function forget(string $key): void
     {
-        unset(static::$shared[$key]);
+        $shared = self::bag('shared');
+        unset($shared[$key]);
+        self::putBag('shared', $shared);
     }
 
     // === Meta / SEO ===
 
     public static function setMeta(string $key, string $value): void
     {
-        static::$meta[$key] = $value;
+        $meta       = self::bag('meta');
+        $meta[$key] = $value;
+        self::putBag('meta', $meta);
     }
 
     public static function setMetaBulk(array $data): void
     {
-        static::$meta = array_merge(static::$meta, $data);
+        self::putBag('meta', array_merge(self::bag('meta'), $data));
     }
 
     public static function getMeta(string $key, ?string $default = null): ?string
@@ -69,7 +138,7 @@ class Channel
             static::$meta['title']  = htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         }
         
-        do_action("head", static::$meta);
+        do_action("head", self::bag('meta'));
     }
 
     // === Flash messages ===
@@ -83,12 +152,39 @@ class Channel
 
     public static function flash(string $key, mixed $value): void
     {
+        // Under a coroutine, $_SESSION is a process global shared by every
+        // in-flight request — writing to it leaks one user's flash to another.
+        // Keep it request-scoped instead. NOTE: that makes flash same-request
+        // only under Swoole; for flash that survives a redirect there, use the
+        // Session plugin's SessionPort, which is coroutine-aware.
+        if (self::context() !== null) {
+            $flash       = self::bag('flash');
+            $flash[$key] = $value;
+            self::putBag('flash', $flash);
+
+            return;
+        }
+
         static::ensureSession();
         $_SESSION['__channel_flash'][$key] = $value;
     }
 
     public static function getFlash(string $key, mixed $default = null): mixed
     {
+        if (self::context() !== null) {
+            $flash = self::bag('flash');
+
+            if (!\array_key_exists($key, $flash)) {
+                return $default;
+            }
+
+            $value = $flash[$key];
+            unset($flash[$key]); // one-time
+            self::putBag('flash', $flash);
+
+            return $value;
+        }
+
         static::ensureSession();
         if (isset($_SESSION['__channel_flash'][$key])) {
             $value = $_SESSION['__channel_flash'][$key];
