@@ -58,6 +58,12 @@ class Thing implements SchemaInterface
 
 	public function __toString(): string
 	{
-		return '<script type="application/ld+json">' . json_encode($this) . '</script>';
+		// JSON_HEX_TAG is load-bearing, not cosmetic: without it any '<' in the
+		// data reaches the page verbatim, so a node carrying '</script>' closes
+		// this block early and everything after it is parsed as markup.
+		// Schema::__toString() already sets it; a lone Thing must match.
+		return '<script type="application/ld+json">'
+			. json_encode($this, \JSON_HEX_TAG | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE)
+			. '</script>';
 	}
 }

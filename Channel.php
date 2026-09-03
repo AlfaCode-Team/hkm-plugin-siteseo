@@ -239,7 +239,16 @@ class Channel
             'errors' => static::allErrorBags(),
         ];
 
-        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        // JSON_HEX_TAG escapes '<' and '>' so no shared prop, flash message or
+        // validation error can close this <script> element and continue as
+        // markup. It matters more here than anywhere else in this class:
+        // JSON_UNESCAPED_SLASHES leaves the '/' of '</script>' intact, so
+        // without the hex escaping the sequence survives the encoder whole.
+        $json = json_encode(
+            $payload,
+            JSON_HEX_TAG | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+        );
+
         return "<script>window.__BOOTSTRAP_DATA__ = $json;</script>";
     }
 }

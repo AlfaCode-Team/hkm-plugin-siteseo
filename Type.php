@@ -26,7 +26,12 @@ abstract class Type extends BaseObject
     {
         $this->setProperty('og', 'type', $this->type);
         $this->when($title)->title($title);
-        $this->prs['title'] = $title;
+        // Only overwrite the fallback when a title was actually supplied —
+        // assigning null unconditionally threw the default away and rendered
+        // an empty <title>.
+        if ($title !== null && $title !== '') {
+            $this->prs['title'] = $title;
+        }
         $twitterMeta = new Twitter();
         $this->twitterMeta = $twitterMeta->summary($title);
     }
@@ -160,17 +165,32 @@ abstract class Type extends BaseObject
         $this->tags[] = $property;
     }
 
+    /**
+     * Escape a value for interpolation into element text or a double-quoted
+     * attribute. These strings are page titles and descriptions, which on any
+     * real site come from user-authored content — without this a title
+     * containing `</title><script>` or a quote broke straight out of the
+     * markup this method builds.
+     */
+    private static function esc(?string $value): string
+    {
+        return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+    }
+
     public function __toString(): string
     {
 
         $contents = parent::__toString();
 
-        $conTwitter = (string) $this->twitterMeta; 
+        $title       = self::esc($this->prs['title'] ?? '');
+        $description = self::esc($this->prs['description'] ?? '');
+
+        $conTwitter = (string) $this->twitterMeta;
         $conts = <<<END
         <!-- Primary Meta Tags -->
-        <title>{$this->prs['title']}</title>
-        <meta name="title" content="{$this->prs['title']}" />
-        <meta name="description" content="{$this->prs['description']}" />
+        <title>{$title}</title>
+        <meta name="title" content="{$title}" />
+        <meta name="description" content="{$description}" />
 
         <!-- Open Graph / Facebook -->
         $contents
