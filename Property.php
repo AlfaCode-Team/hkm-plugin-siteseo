@@ -27,7 +27,11 @@ class Property
 
     public function __toString(): string
     {
-        $content = str_replace('"', '&quot;', $this->content);
+        // Full entity escaping, not just the quote. Escaping only `"` left `&`
+        // to corrupt the value (`&amp;` round-trips wrong) and left `<`/`>` in
+        // place, so the value was only ever safe by virtue of the surrounding
+        // quotes — a fragile guarantee to rest user content on.
+        $content = htmlspecialchars((string) $this->content, ENT_QUOTES, 'UTF-8');
 
         return "<meta property=\"{$this->prefix}:{$this->property}\" content=\"{$content}\">";
     }
