@@ -1,7 +1,7 @@
 {
     "name":    "siteseo",
-    "version": "1.0.6",
-    "kernel": "^1.13.1",
+    "version": "1.0.7",
+    "kernel": "^1.17.1",
     "solves":  "seo.management",
     "type":    "module",
 
